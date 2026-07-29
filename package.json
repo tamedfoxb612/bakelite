@@ -1,12 +1,11 @@
 {
-  "name": "b612",
+  "name": "b612clone",
   "version": "1.0.0",
-  "description": "B612 App",
-  "main": "server.js",
+  "type": "module",
   "scripts": {
     "dev": "node server.js",
-    "build": "echo 'No build step'",
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo 'No build step required'"
   },
   "dependencies": {
     "express": "^4.19.2"

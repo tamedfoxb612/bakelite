@@ -27,7 +27,7 @@ jobs:
             const key = 'sb_publishable_IED8Q0cnxphV6LWsaOV9cg_qChpAX8H';
             const supabase = createClient(url, key);
             async function cleanup() {
-              console.log('Clearing messages from DB (this includes media chunks)...');
+              console.log('Clearing messages...');
               const { error: msgErr } = await supabase.from('messages').delete().neq('id', 0);
               if (msgErr) console.error('Error clearing messages:', msgErr);
               

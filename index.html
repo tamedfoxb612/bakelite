@@ -60,7 +60,6 @@
       <header class="room-header">
         <div class="room-info">
           <button id="leave-room-btn" class="btn btn-icon-small btn-leave" title="Leave Room">🚪</button>
-          <span class="room-code-display"><strong id="header-room-code"></strong> <span id="encryption-status-icon" class="encryption-icon pending" aria-label="Encrypting..." title="Encrypting...">⏳</span></span>
           <span id="feed-count" class="activities-count">0 messages</span>
         </div>
         <div class="room-top-actions">
@@ -83,15 +82,16 @@
       <!-- Bottom Bar (Sketch 1: Input Box + Heart Button) -->
       <footer class="room-bottom-bar">
         <div class="room-code-above-input">Room Code: <strong id="current-room-code">B612</strong></div>
+        <div id="media-preview-container" class="media-preview-container"></div>
         <form id="message-form" class="room-input-form">
-          <div class="media-upload-wrapper" style="position: relative; display: flex; align-items: center; margin-right: 8px;">
-             <button type="button" id="media-menu-btn" class="btn-media-action" title="Attach Media" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">📎</button>
-             <div id="media-menu" class="media-menu hidden" style="position: absolute; bottom: 100%; left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; z-index: 10;">
-                <button type="button" id="media-photo-btn" style="background: transparent; border: none; padding: 8px 12px; cursor: pointer; text-align: left; white-space: nowrap; color: var(--text);">📷 Photo/Video</button>
-                <button type="button" id="media-file-btn" style="background: transparent; border: none; padding: 8px 12px; cursor: pointer; text-align: left; white-space: nowrap; color: var(--text);">📄 File</button>
-             </div>
-             <input type="file" id="media-photo-input" accept="image/*,video/*" multiple capture="environment" style="display:none" />
-             <input type="file" id="media-file-input" accept="*/*" multiple style="display:none" />
+          <div class="media-upload-wrapper" style="position: relative; display: flex; align-items: center;">
+            <button type="button" id="media-upload-btn" class="btn btn-icon-small" title="Attach media or file" style="width: 44px; height: 44px; font-size: 1.2rem; margin-right: 8px;">📎</button>
+            <div id="media-upload-menu" class="media-upload-menu hidden">
+              <button type="button" id="upload-photo-video-btn" class="media-menu-item">📷 Photo / Video</button>
+              <button type="button" id="upload-file-btn" class="media-menu-item">📄 File</button>
+            </div>
+            <input type="file" id="hidden-photo-video-input" accept="image/*,video/*" multiple capture="environment" style="display:none" />
+            <input type="file" id="hidden-file-input" accept="*/*" multiple style="display:none" />
           </div>
           <input type="text" id="message-input" placeholder="Type a sweet message or press heart..." autocomplete="off" />
           <button type="submit" id="room-heart-btn" class="btn-giant-heart-action" aria-label="Send Heart or Message">
@@ -330,7 +330,6 @@
       </div>
   </div>
 
-  <script src="./crypto.js"></script>
   <script src="./app.js?v=3"></script>
 </body>
 </html>
