@@ -269,10 +269,26 @@ function setupEventListeners() {
   elements.closeSidebarBtn?.addEventListener('click', closeSidebar);
   elements.sidebarOverlay?.addEventListener('click', closeSidebar);
 
+  // Front Page Theme Dropdown Toggle
+  elements.frontThemeBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    elements.frontThemeMenu?.classList.toggle('hidden');
+  });
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (elements.frontThemeMenu && !elements.frontThemeMenu.classList.contains('hidden')) {
+      if (elements.frontThemeBtn && !elements.frontThemeBtn.contains(e.target) && !elements.frontThemeMenu.contains(e.target)) {
+        elements.frontThemeMenu.classList.add('hidden');
+      }
+    }
+  });
+
   document.querySelectorAll('.theme-item').forEach(btn => {
     btn.addEventListener('click', (e) => {
       handleThemeSelection(e.currentTarget.dataset.theme);
       closeSidebar();
+      elements.frontThemeMenu?.classList.add('hidden');
     });
   });
 
@@ -364,6 +380,88 @@ function setupEventListeners() {
     }
     if (!isMinimized) clearUnreadMessages();
   });
+
+  const mediaMenuBtn = document.getElementById('media-menu-btn');
+  const mediaMenu = document.getElementById('media-menu');
+  const mediaPhotoBtn = document.getElementById('media-photo-btn');
+  const mediaFileBtn = document.getElementById('media-file-btn');
+  const mediaPhotoInput = document.getElementById('media-photo-input');
+  const mediaFileInput = document.getElementById('media-file-input');
+  
+  if (mediaMenuBtn) {
+    mediaMenuBtn.addEventListener('click', (e) => {
+       e.preventDefault();
+       e.stopPropagation();
+       mediaMenu.classList.toggle('hidden');
+    });
+    
+    document.addEventListener('click', (e) => {
+       if (mediaMenu && !mediaMenu.contains(e.target) && e.target !== mediaMenuBtn) {
+          mediaMenu.classList.add('hidden');
+       }
+    });
+  }
+  
+  if (mediaPhotoBtn) mediaPhotoBtn.addEventListener('click', () => { mediaPhotoInput.click(); mediaMenu.classList.add('hidden'); });
+  if (mediaFileBtn) mediaFileBtn.addEventListener('click', () => { mediaFileInput.click(); mediaMenu.classList.add('hidden'); });
+  
+    const handleMediaUpload = async (e) => {
+     const files = e.target.files;
+     if (!files || files.length === 0) return;
+     for (const file of files) {
+        showToast('Encrypting and uploading...', 'info');
+        const encryptedBlob = await encryptFile(file);
+        
+        const buffer = await encryptedBlob.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+           binary += String.fromCharCode(bytes[i]);
+        }
+        const base64Data = btoa(binary);
+        
+        const fileId = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
+        const chunkSize = 250000; // 250KB per chunk
+        const totalChunks = Math.ceil(base64Data.length / chunkSize);
+        
+        if (state.supabase) {
+           for (let i = 0; i < totalChunks; i++) {
+              const chunkData = base64Data.slice(i * chunkSize, (i + 1) * chunkSize);
+              const chunkPayload = JSON.stringify({ fileId, chunkIndex: i, totalChunks, data: chunkData });
+              try {
+                await state.supabase.from('messages').insert([{
+                   room_code: state.roomCode,
+                   type: 'media-chunk',
+                   content: `${state.userName}: ${chunkPayload}`
+                }]);
+              } catch(err) { console.error('Chunk upload error', err); }
+           }
+        }
+        
+        const payload = {
+           type: 'media',
+           content: JSON.stringify({ fileId, type: file.type, name: file.name }),
+           sender: state.userName,
+           timestamp: new Date().toISOString()
+        };
+        appendFeedItem('media', payload.content, 'You', new Date());
+        relaySend(payload);
+        
+        if (state.supabase) {
+           try {
+             await state.supabase.from('messages').insert([{
+               room_code: state.roomCode,
+               type: 'media',
+               content: `${state.userName}: ${payload.content}`
+             }]);
+           } catch(e) {}
+        }
+     }
+     e.target.value = '';
+  };
+  
+  if (mediaPhotoInput) mediaPhotoInput.addEventListener('change', handleMediaUpload);
+  if (mediaFileInput) mediaFileInput.addEventListener('change', handleMediaUpload);
 
   elements.messageInput?.addEventListener('focus', clearUnreadMessages);
   elements.messageInput?.addEventListener('click', clearUnreadMessages);
@@ -499,12 +597,18 @@ async function getOrAcquireLocalStream() {
         return stream;
       } catch (err3) {
         console.warn('Video failed, trying audio only:', err3);
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        state.localStream = stream;
-        stream.getAudioTracks().forEach(t => t.enabled = !state.isMuted);
-        if (elements.localVideo) elements.localVideo.srcObject = stream;
-        updateControlEmojis();
-        return stream;
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          state.localStream = stream;
+          stream.getAudioTracks().forEach(t => t.enabled = !state.isMuted);
+          if (elements.localVideo) elements.localVideo.srcObject = stream;
+          updateControlEmojis();
+          return stream;
+        } catch (err4) {
+          console.error('All getUserMedia attempts failed:', err4);
+          showToast('Media permissions denied or unavailable. You can still chat.', 'error');
+          return null; // Return null to prevent crashing
+        }
       }
     }
   }
@@ -522,11 +626,31 @@ async function completeRoomJoin() {
     elements.statusBadge.textContent = 'Online';
   }
 
+  const headerRoomCode = document.getElementById('header-room-code');
+  if (headerRoomCode) headerRoomCode.textContent = state.roomCode;
+
+  // Crypto Setup
+  await initMyKeyPair();
+  const hasKey = await loadRoomKey(state.roomCode);
+
   // Connect to Realtime Channel
   setupRealtimeSubscription();
 
   // Load past history if connected to live DB
   loadPastMessages();
+  
+  if (!hasKey) {
+     relaySend({
+       type: 'key-request',
+       sender: state.userName,
+       publicKey: await crypto.subtle.exportKey('jwk', cryptoState.myKeyPair.publicKey)
+     });
+     setTimeout(() => {
+        if (!cryptoState.isEncryptionReady) {
+           generateRoomKey(state.roomCode);
+        }
+     }, 2000);
+  }
 }
 
 function cleanupRealtimeConnections() {
@@ -559,7 +683,7 @@ function processIncomingRelayEvent(data) {
     seenEventIds.delete(first);
   }
   if (data.sender === state.userName) return;
-  if (data.signaling || ['offer', 'answer', 'ice-candidate', 'call-invite', 'call-accept', 'call-decline', 'theme-change', 'cam-toggle', 'screen-share-toggle', 'toggle-circle-speech', 'end-call', 'clear-messages', 'clear-video-messages', 'play-together', 'arcade-input', 'arcade-mouse', 'arcade-chat-msg', 'leave-arcade'].includes(data.type)) {
+  if (data.signaling || ['offer', 'answer', 'ice-candidate', 'call-invite', 'call-accept', 'call-decline', 'theme-change', 'cam-toggle', 'screen-share-toggle', 'toggle-circle-speech', 'end-call', 'clear-messages', 'clear-video-messages', 'play-together', 'arcade-input', 'arcade-mouse', 'arcade-chat-msg', 'leave-arcade', 'key-request', 'key-response'].includes(data.type)) {
     handleSignalingMessage(data);
   } else {
     handleIncomingPayload(data);
@@ -577,8 +701,10 @@ function handleLeaveRoom() {
   elements.loginView.classList.remove('hidden');
   elements.loginView.classList.add('active');
   
-  elements.statusBadge.className = 'status-badge offline';
-  elements.statusBadge.textContent = 'Offline';
+  if (elements.statusBadge) {
+    elements.statusBadge.className = 'status-badge offline';
+    elements.statusBadge.textContent = 'Offline';
+  }
   showToast('You left the love room.', 'info');
 }
 
@@ -645,23 +771,34 @@ function setupRealtimeSubscription() {
 /**
  * Handle incoming chat or heart pager payload
  */
-function handleIncomingPayload(data) {
+async function handleIncomingPayload(data) {
   if (!data) return;
-  if (data.signaling || ['offer', 'answer', 'ice-candidate', 'call-invite', 'call-accept', 'call-decline', 'theme-change', 'cam-toggle', 'screen-share-toggle', 'toggle-circle-speech', 'end-call', 'clear-messages', 'clear-video-messages', 'play-together', 'arcade-input', 'arcade-mouse', 'arcade-chat-msg', 'leave-arcade'].includes(data.type)) {
+  if (data.signaling || ['offer', 'answer', 'ice-candidate', 'call-invite', 'call-accept', 'call-decline', 'theme-change', 'cam-toggle', 'screen-share-toggle', 'toggle-circle-speech', 'end-call', 'clear-messages', 'clear-video-messages', 'play-together', 'arcade-input', 'arcade-mouse', 'arcade-chat-msg', 'leave-arcade', 'key-request', 'key-response'].includes(data.type)) {
     handleSignalingMessage(data);
     return;
   }
   const { type, content, sender, timestamp } = data;
   if (sender === state.userName) return; // ignore self broadcast echoes
+  if (type === 'media-chunk') return;
   
-  appendFeedItem(type, content, sender || 'Partner', new Date(timestamp || Date.now()));
+  let decryptedContent = content;
+  if (type === 'message') {
+     decryptedContent = await decryptMessageContent(content);
+  } else if (type === 'media') {
+     // content is the media URL or blob info
+  }
+  
+  appendFeedItem(type, decryptedContent, sender || 'Partner', new Date(timestamp || Date.now()));
   
   if (type === 'heart') {
     showToast(`❤️ Heart Page received from ${sender || 'Partner'}!`, 'success');
     showNativeNotification(`❤️ Heart Page!`, `${sender || 'Partner'} sent you a giant heart!`);
   } else if (type === 'message') {
-    showToast(`💌 New message from ${sender || 'Partner'}: "${content}"`, 'info');
-    showNativeNotification(`💌 ${sender || 'Partner'}`, content);
+    showToast(`💌 New message from ${sender || 'Partner'}: "${decryptedContent}"`, 'info');
+    showNativeNotification(`💌 ${sender || 'Partner'}`, decryptedContent);
+  } else if (type === 'media') {
+    showToast(`📎 New media from ${sender || 'Partner'}`, 'info');
+    showNativeNotification(`📎 ${sender || 'Partner'}`, "Sent a file");
   }
 }
 
@@ -675,15 +812,22 @@ async function loadPastMessages() {
       .from('messages')
       .select('*')
       .eq('room_code', state.roomCode)
+      .neq('type', 'media-chunk')
       .order('created_at', { ascending: true })
       .limit(50);
 
     if (error) throw error;
     if (data && data.length > 0) {
       elements.chatFeed.innerHTML = '';
-      data.forEach(msg => {
-        appendFeedItem(msg.type, msg.content, msg.content.includes(':') ? msg.content.split(':')[0] : 'Partner', new Date(msg.created_at), false);
-      });
+      for (const msg of data) {
+        let content = msg.content;
+        let sender = content.includes(':') ? content.split(':')[0] : 'Partner';
+        let pureContent = content.substring(sender.length + 1).trim();
+        if (msg.type === 'message') {
+           pureContent = await decryptMessageContent(pureContent);
+        }
+        appendFeedItem(msg.type, pureContent, sender, new Date(msg.created_at), false);
+      }
     }
   } catch (err) {
     console.log('Past history notice (table not yet created or demo project):', err.message);
@@ -736,13 +880,16 @@ async function handleSendMessage(e) {
 async function sendChatMessageText(text) {
   if (!text) return;
 
+  const encryptedText = await encryptMessageContent(text);
+  
   const payload = {
     type: 'message',
-    content: text,
+    content: encryptedText,
     sender: state.userName,
     timestamp: new Date().toISOString()
   };
 
+  // We append plaintext to our own UI
   appendFeedItem('message', text, 'You', new Date());
 
   relaySend(payload);
@@ -752,12 +899,12 @@ async function sendChatMessageText(text) {
       await state.supabase.from('messages').insert([{
         room_code: state.roomCode,
         type: 'message',
-        content: `${state.userName}: ${text}`
+        content: `${state.userName}: ${encryptedText}`
       }]);
     } catch (e) { /* ignore */ }
   }
 
-  triggerRemotePushNotification(`💌 ${state.userName}`, text);
+  triggerRemotePushNotification(`💌 ${state.userName}`, "Encrypted message");
 }
 
 /**
@@ -782,11 +929,45 @@ function appendFeedItem(type, content, sender, timeObj, animate = true) {
   } else {
     const cleanContent = content.replace(/^.*?: /, '');
     item.className = `feed-item ${isSelf ? 'self' : 'partner'} ${animate ? '' : 'no-animate'}`;
+    
+    let innerContent = cleanContent;
+    if (type === 'media') {
+       try {
+           const meta = JSON.parse(cleanContent);
+           const uniqueId = 'media-' + Math.random().toString(36).substr(2, 9);
+           innerContent = `<div id="${uniqueId}" class="media-container">
+               <button class="btn btn-primary" onclick="downloadEncryptedMedia('${meta.fileId}', '${meta.type}', '${meta.name}')">Download ${meta.name}</button>
+           </div>`;
+           
+           // Automatically attempt to decrypt and display inline
+           setTimeout(async () => {
+              try {
+                  const blob = await fetchMediaBlob(meta.fileId, meta.type);
+                  if (!blob) throw new Error('Blob not found');
+                  const decryptedBlob = await decryptFile(blob, meta.type);
+                  const objUrl = URL.createObjectURL(decryptedBlob);
+                  const container = document.getElementById(uniqueId);
+                  if (container) {
+                     if (meta.type.startsWith('image/')) {
+                         container.innerHTML = `<img src="${objUrl}" style="max-width: 100%; border-radius: 8px;" alt="media"/>`;
+                     } else if (meta.type.startsWith('video/')) {
+                         container.innerHTML = `<video src="${objUrl}" controls style="max-width: 100%; border-radius: 8px;"></video>`;
+                     } else {
+                         container.innerHTML = `<a href="${objUrl}" download="${meta.name}" class="btn btn-primary" style="display:inline-block">Download ${meta.name}</a>`;
+                     }
+                  }
+              } catch (e) { console.error('Media load error', e); }
+           }, 100);
+       } catch (e) {
+           innerContent = `[Encrypted Media]`;
+       }
+    }
+    
     item.innerHTML = `
       <div class="feed-meta"><span class="sender">${isSelf ? 'You' : sender}</span> <span>${timeStr} <button class="msg-delete-btn" title="Delete message">×</button></span></div>
-      <div class="feed-content">${cleanContent}</div>
+      <div class="feed-content">${innerContent}</div>
     `;
-    showCircleSpeechBubble(isSelf ? 'local' : sender, cleanContent);
+    if (type !== 'media') showCircleSpeechBubble(isSelf ? 'local' : sender, cleanContent);
   }
 
   if (isSelf) {
@@ -1201,6 +1382,17 @@ async function handleSignalingMessage(data) {
 
   // Ignore targeted signaling messages that are not meant for us
   if (data.target && data.target !== state.userName) {
+    return;
+  }
+
+  if (data.type === 'key-request') {
+    handleKeyRequest(data.publicKey, data.sender).then(encKey => {
+      if (encKey) relaySend({ type: 'key-response', target: data.sender, sender: state.userName, encryptedKey: encKey });
+    });
+    return;
+  }
+  if (data.type === 'key-response') {
+    saveReceivedRoomKey(state.roomCode, data.encryptedKey);
     return;
   }
 
@@ -2136,13 +2328,16 @@ async function clearRoomMessages(broadcast = true) {
   elements.chatFeed.innerHTML = '<div class="empty-feed">Room messages cleared.</div>';
   state.activitiesCount = 0;
   if (elements.feedCount) elements.feedCount.textContent = '0 messages';
+  
   if (state.supabase && state.roomCode) {
     try {
       const { error } = await state.supabase.from('messages').delete().eq('room_code', state.roomCode);
       if (error) console.warn('Supabase delete error:', error);
     } catch (e) { console.warn(e); }
   }
+  
   showToast('🧹 All room messages deleted!', 'success');
+  
   if (broadcast) {
     sendSignaling({ type: 'clear-messages', sender: state.userName });
   }
@@ -2945,3 +3140,61 @@ function setupBubbleDragging(el) {
   }
 }
 
+
+window.fetchMediaBlob = async (fileId, originalType) => {
+   if (!state.supabase) return null;
+   try {
+       const { data, error } = await state.supabase
+           .from('messages')
+           .select('content')
+           .eq('room_code', state.roomCode)
+           .eq('type', 'media-chunk')
+           .like('content', `%${fileId}%`);
+       
+       if (error || !data) return null;
+       
+       const chunks = [];
+       for (const row of data) {
+           try {
+               const cleanContent = row.content.replace(/^.*?: /, '');
+               const parsed = JSON.parse(cleanContent);
+               if (parsed.fileId === fileId) {
+                   chunks.push(parsed);
+               }
+           } catch(e) {}
+       }
+       chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+       
+       let base64Data = '';
+       for (const c of chunks) {
+           base64Data += c.data;
+       }
+       
+       const binaryStr = atob(base64Data);
+       const bytes = new Uint8Array(binaryStr.length);
+       for (let i = 0; i < binaryStr.length; i++) {
+           bytes[i] = binaryStr.charCodeAt(i);
+       }
+       return new Blob([bytes], { type: 'application/octet-stream' });
+   } catch(e) {
+       console.error('fetchMediaBlob error:', e);
+       return null;
+   }
+};
+
+window.downloadEncryptedMedia = async (fileId, type, name) => {
+   try {
+       showToast('Fetching and decrypting download...', 'info');
+       const blob = await fetchMediaBlob(fileId, type);
+       if (!blob) throw new Error('Blob not found');
+       const decryptedBlob = await decryptFile(blob, type);
+       const objUrl = URL.createObjectURL(decryptedBlob);
+       const a = document.createElement('a');
+       a.href = objUrl;
+       a.download = name;
+       a.click();
+       URL.revokeObjectURL(objUrl);
+   } catch(e) {
+       showToast('Decryption failed', 'error');
+   }
+};

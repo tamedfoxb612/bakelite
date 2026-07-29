@@ -1,4 +1,6 @@
-name: Midnight Supabase Cleanup
+const fs = require('fs');
+
+const cleanupCode = `name: Midnight Supabase Cleanup
 
 on:
   schedule:
@@ -39,3 +41,5 @@ jobs:
             }
             cleanup();
           "
+`;
+fs.writeFileSync('cleanup.yml', cleanupCode);
